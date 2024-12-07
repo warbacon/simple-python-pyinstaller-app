@@ -1,3 +1,4 @@
+# Configurar el proveedor de Docker
 terraform {
   required_providers {
     docker = {
@@ -9,10 +10,12 @@ terraform {
 
 provider "docker" {}
 
-resource "docker_network" "jenkins" {
+# Crear la red de Jenkins
+resource "docker_network" "jenkins_network" {
   name = "jenkins"
 }
 
+# Crear los volúmenes
 resource "docker_volume" "jenkins_docker_certs" {
   name = "jenkins-docker-certs"
 }
@@ -21,11 +24,25 @@ resource "docker_volume" "jenkins_data" {
   name = "jenkins-data"
 }
 
+# Construir la imagen personalizada de Jenkins
+resource "docker_image" "jenkins_blueocean" {
+  name = "myjenkins-blueocean"
+  build {
+    context = "."
+  }
+}
+
+# Crear el contenedor Docker-in-Docker de Jenkins
 resource "docker_container" "jenkins_docker" {
-  name         = "jenkins-docker"
-  image        = "docker:dind"
-  privileged   = true
-  network_mode = docker_network.jenkins.name
+  name       = "jenkins-docker"
+  image      = "docker:dind"
+  rm         = true
+  privileged = true
+
+  networks_advanced {
+    name    = docker_network.jenkins_network.name
+    aliases = ["docker"]
+  }
 
   env = [
     "DOCKER_TLS_CERTDIR=/certs"
@@ -49,24 +66,31 @@ resource "docker_container" "jenkins_docker" {
   command = ["--storage-driver", "overlay2"]
 }
 
-resource "docker_image" "myjenkins_blueocean" {
-  name = "myjenkins-blueocean"
-  build {
-    context = "./"
-  }
-}
-
+# Crear el contenedor de Jenkins
 resource "docker_container" "jenkins_blueocean" {
-  name         = "jenkins-blueocean"
-  image        = docker_image.myjenkins_blueocean.name
-  restart      = "on-failure"
-  network_mode = docker_network.jenkins.name
+  name    = "jenkins-blueocean"
+  image   = docker_image.jenkins_blueocean.image_id
+  restart = "on-failure"
+
+  networks_advanced {
+    name = docker_network.jenkins_network.name
+  }
 
   env = [
     "DOCKER_HOST=tcp://docker:2376",
     "DOCKER_CERT_PATH=/certs/client",
     "DOCKER_TLS_VERIFY=1"
   ]
+
+  ports {
+    internal = 8080
+    external = 8080
+  }
+
+  ports {
+    internal = 50000
+    external = 50000
+  }
 
   volumes {
     volume_name    = docker_volume.jenkins_data.name
@@ -79,13 +103,5 @@ resource "docker_container" "jenkins_blueocean" {
     read_only      = true
   }
 
-  ports {
-    internal = 8080
-    external = 8080
-  }
-
-  ports {
-    internal = 50000
-    external = 50000
-  }
+  depends_on = [docker_container.jenkins_docker]
 }
